@@ -1,11 +1,11 @@
 # lib/firebase_utils.py
+import base64
 import json
 import requests
 import streamlit as st
 from google.cloud import firestore
 from google.oauth2 import service_account
 
-# ----------------- Config -----------------
 def _cfg():
     return st.secrets["firebase"]
 
@@ -16,24 +16,28 @@ def _api_key():
 def _db():
     cfg = _cfg()
 
-    # Prefer a raw JSON string if provided
-    sa_json = cfg.get("service_account_json", "").strip()
     sa = None
-
-    if sa_json:
+    b64 = cfg.get("service_account_b64", "").strip()
+    if b64:
         try:
-            sa = json.loads(sa_json)
+            sa = json.loads(base64.b64decode(b64).decode("utf-8"))
         except Exception as e:
-            raise ValueError(f"service_account_json is present but not valid JSON: {e}")
+            raise ValueError(f"service_account_b64 could not be decoded: {e}")
+
+    if sa is None:
+        sa_json = cfg.get("service_account_json", "").strip()
+        if sa_json:
+            try:
+                sa = json.loads(sa_json)  # \n in JSON becomes real newlines
+            except Exception as e:
+                raise ValueError(f"service_account_json is present but not valid JSON: {e}")
 
     if sa is None:
         raw = cfg.get("service_account", None)
         if raw is None:
-            raise ValueError("No service account found. Add either [firebase].service_account_json (string) "
-                             "or [firebase].service_account (table) in Streamlit Secrets.")
-        # raw may be a TOML table/mapping or a JSON string
+            raise ValueError("No service account found. Add firebase.service_account_b64 "
+                             "or firebase.service_account_json or firebase.service_account.")
         sa = json.loads(raw) if isinstance(raw, str) else {k: raw[k] for k in raw.keys()}
-        # normalize private key newlines if it came with literal \n
         pk = sa.get("private_key", "")
         if "\\n" in pk and "-----BEGIN PRIVATE KEY-----" in pk:
             sa["private_key"] = pk.replace("\\n", "\n")
@@ -41,16 +45,16 @@ def _db():
     creds = service_account.Credentials.from_service_account_info(sa)
     db = firestore.Client(project=cfg["projectId"], credentials=creds)
 
-    # lightweight (non-sensitive) debug
+    # non-sensitive debug
     st.session_state["_debug_db_project"] = db.project
     st.session_state["_debug_sa_email"] = sa.get("client_email", "")
+    st.session_state["_debug_pk_len"] = len(sa.get("private_key", ""))
     return db
 
 def get_db():
     return _db()
 
-# ----------------- Auth (REST) -----------------
-# https://identitytoolkit.googleapis.com/v1/
+# ---- Auth (REST) ----
 def _post(url, payload):
     r = requests.post(url, json=payload, timeout=20)
     if r.status_code >= 400:
@@ -79,7 +83,6 @@ def send_verification_email(id_token):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={_api_key()}"
     return _post(url, {"requestType": "VERIFY_EMAIL", "idToken": id_token})
 
-# ----------------- Session helpers -----------------
 def current_user():
     return st.session_state.get("user")
 
@@ -87,7 +90,6 @@ def require_auth():
     if "user" not in st.session_state:
         st.stop()
 
-# ----------------- Firestore helpers -----------------
 def upsert_doc(path, data: dict, merge=True):
     get_db().document(path).set(data, merge=merge)
 
