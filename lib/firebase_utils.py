@@ -30,10 +30,12 @@ def _init_db():
         sa = {k: sa[k] for k in sa.keys()}
 
     if not firebase_admin._apps:
-        cred = credentials.Certificate(sa)
-        firebase_admin.initialize_app(cred)
+        cred = credentials.Certificate(sa)   # `sa` is your normalized dict
+        # Force the projectId to match your web config's projectId
+        firebase_admin.initialize_app(cred, {"projectId": _firebase_cfg()["projectId"]})
 
     return firestore.client()
+
 
 def get_db():
     return _init_db()
