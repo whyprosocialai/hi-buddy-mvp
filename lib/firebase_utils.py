@@ -2,8 +2,6 @@
 import json
 import requests
 import streamlit as st
-
-# Firestore (explicit creds + project binding)
 from google.cloud import firestore
 from google.oauth2 import service_account
 
@@ -17,29 +15,36 @@ def _api_key():
 @st.cache_resource
 def _db():
     cfg = _cfg()
-    sa = cfg.get("service_account")
 
-    # Normalize to a plain dict from TOML/Secrets
-    if isinstance(sa, str):
-        sa = json.loads(sa)
-    else:
-        sa = {k: sa[k] for k in sa.keys()}
+    # Prefer a raw JSON string if provided
+    sa_json = cfg.get("service_account_json", "").strip()
+    sa = None
 
-    # ---- FIX: ensure private_key has real newlines (not "\n") ----
-    pk = sa.get("private_key", "")
-    if "\\n" in pk and "-----BEGIN PRIVATE KEY-----" in pk:
-        # convert backslash-n to actual newlines
-        sa["private_key"] = pk.replace("\\n", "\n")
+    if sa_json:
+        try:
+            sa = json.loads(sa_json)
+        except Exception as e:
+            raise ValueError(f"service_account_json is present but not valid JSON: {e}")
 
-    # Build explicit credentials and client bound to the web projectId
+    if sa is None:
+        raw = cfg.get("service_account", None)
+        if raw is None:
+            raise ValueError("No service account found. Add either [firebase].service_account_json (string) "
+                             "or [firebase].service_account (table) in Streamlit Secrets.")
+        # raw may be a TOML table/mapping or a JSON string
+        sa = json.loads(raw) if isinstance(raw, str) else {k: raw[k] for k in raw.keys()}
+        # normalize private key newlines if it came with literal \n
+        pk = sa.get("private_key", "")
+        if "\\n" in pk and "-----BEGIN PRIVATE KEY-----" in pk:
+            sa["private_key"] = pk.replace("\\n", "\n")
+
     creds = service_account.Credentials.from_service_account_info(sa)
     db = firestore.Client(project=cfg["projectId"], credentials=creds)
 
-    # Lightweight debug (not sensitive)
+    # lightweight (non-sensitive) debug
     st.session_state["_debug_db_project"] = db.project
     st.session_state["_debug_sa_email"] = sa.get("client_email", "")
     return db
-
 
 def get_db():
     return _db()
