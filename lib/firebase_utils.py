@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 import streamlit as st
 import firebase_admin
@@ -12,24 +13,44 @@ def _api_key():
     return _firebase_cfg()["apiKey"]
 
 @st.cache_resource
+def _firebase_cfg():
+    return st.secrets["firebase"]
+
+@st.cache_resource
 def _init_db():
     cfg = _firebase_cfg()
-    service_account = cfg["service_account"]
+    sa = cfg.get("service_account")
+
+    # --- normalize service account into a plain dict ---
+    if isinstance(sa, str):
+        # You pasted it as a JSON string in secrets
+        sa = json.loads(sa)
+    else:
+        # It's a toml section / Mapping; turn it into a real dict
+        sa = {k: sa[k] for k in sa.keys()}
+
     if not firebase_admin._apps:
-        cred = credentials.Certificate(service_account)
+        cred = credentials.Certificate(sa)
         firebase_admin.initialize_app(cred)
+
     return firestore.client()
 
-# Public accessors
 def get_db():
     return _init_db()
 
 # ------------ Auth via Firebase REST ------------
 # Docs: https://identitytoolkit.googleapis.com/v1/
 
+import requests
+
 def _post(url, payload):
     r = requests.post(url, json=payload, timeout=20)
-    r.raise_for_status()
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("error", {}).get("message")
+        except Exception:
+            detail = r.text
+        raise requests.HTTPError(f"{r.status_code} {r.reason}: {detail}")
     return r.json()
 
 def sign_up(email, password):
