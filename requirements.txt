@@ -1,6 +1,6 @@
 streamlit>=1.36
-pyrebase4==4.7.1
 firebase-admin>=6.5.0
 google-cloud-firestore>=2.16.0
+requests>=2.31.0
 pytz
 python-dateutil

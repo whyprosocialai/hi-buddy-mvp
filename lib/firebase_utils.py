@@ -1,80 +1,75 @@
-import json, os, time
+import os
+import requests
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
-import pyrebase
 
-# --- Read secrets (set these in Streamlit Secrets) ---
-# st.secrets["firebase"] should contain:
-# {
-#   "apiKey": "...",
-#   "authDomain": "...",
-#   "projectId": "...",
-#   "storageBucket": "...",
-#   "messagingSenderId": "...",
-#   "appId": "...",
-#   "databaseURL": "https://<project>.firebaseio.com",
-#   "service_account": { ... full service account json ... }
-# }
+# ------------ Config helpers ------------
+def _firebase_cfg():
+    return st.secrets["firebase"]
+
+def _api_key():
+    return _firebase_cfg()["apiKey"]
 
 @st.cache_resource
-def _init_clients():
-    cfg = dict(st.secrets["firebase"])
-    service_account = cfg.pop("service_account")
-
-    # Pyrebase for Auth
-    pb = pyrebase.initialize_app(cfg)
-    auth = pb.auth()
-
-    # Admin SDK for Firestore
+def _init_db():
+    cfg = _firebase_cfg()
+    service_account = cfg["service_account"]
     if not firebase_admin._apps:
         cred = credentials.Certificate(service_account)
         firebase_admin.initialize_app(cred)
-    db = firestore.client()
-    return auth, db
+    return firestore.client()
 
-def clients():
-    return _init_clients()
+# Public accessors
+def get_db():
+    return _init_db()
+
+# ------------ Auth via Firebase REST ------------
+# Docs: https://identitytoolkit.googleapis.com/v1/
+
+def _post(url, payload):
+    r = requests.post(url, json=payload, timeout=20)
+    r.raise_for_status()
+    return r.json()
 
 def sign_up(email, password):
-    auth, _ = clients()
-    user = auth.create_user_with_email_and_password(email, password)
-    auth.send_email_verification(user['idToken'])
-    return user
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={_api_key()}"
+    data = _post(url, {"email": email, "password": password, "returnSecureToken": True})
+    # optional: send verification email
+    try:
+        send_verification_email(data["idToken"])
+    except Exception:
+        pass
+    return {"localId": data["localId"], "idToken": data["idToken"], "refreshToken": data.get("refreshToken")}
 
 def sign_in(email, password):
-    auth, _ = clients()
-    user = auth.sign_in_with_email_and_password(email, password)
-    return user
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={_api_key()}"
+    data = _post(url, {"email": email, "password": password, "returnSecureToken": True})
+    return {"localId": data["localId"], "idToken": data["idToken"], "refreshToken": data.get("refreshToken")}
 
-def refresh(id_token):
-    auth, _ = clients()
-    return auth.refresh(id_token)
+def send_verification_email(id_token):
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={_api_key()}"
+    return _post(url, {"requestType": "VERIFY_EMAIL", "idToken": id_token})
 
-def get_db():
-    _, db = clients()
-    return db
-
+# ------------ Session helpers ------------
 def current_user():
-    """Return dict with uid/email from session, else None."""
     return st.session_state.get("user")
 
 def require_auth():
     if "user" not in st.session_state:
         st.stop()
 
-# --- Simple Firestore helpers ---
+# ------------ Firestore helpers ------------
 def upsert_doc(path, data: dict, merge=True):
-    db = get_db()
-    db.document(path).set(data, merge=merge)
+    get_db().document(path).set(data, merge=merge)
 
 def add_doc(path, data: dict):
-    db = get_db()
-    return db.collection(path).add(data)
+    return get_db().collection(path).add(data)
 
 def list_docs(path, limit=50, order_by=None, desc=True):
     db = get_db()
     col = db.collection(path)
     if order_by:
-        col = col.order_by(order_by, direction=firestore.Query.DESCENDING if desc else firestore.Query.ASCENDING)
-    return [ {**d.to_dict(), "id": d.id} for d in col.limit(limit).stream() ]
+        from google.cloud import firestore as gcf
+        col = col.order_by(order_by, direction=gcf.Query.DESCENDING if desc else gcf.Query.ASCENDING)
+    return [{**d.to_dict(), "id": d.id} for d in col.limit(limit).stream()]
