@@ -1,3 +1,5 @@
+#firebase_utils.py
+
 import os
 import json
 import requests
@@ -17,25 +19,29 @@ def _firebase_cfg():
     return st.secrets["firebase"]
 
 @st.cache_resource
+import json
+import streamlit as st
+from google.cloud import firestore
+from google.oauth2 import service_account
+
+def _firebase_cfg():
+    return st.secrets["firebase"]
+
+@st.cache_resource
 def _init_db():
     cfg = _firebase_cfg()
     sa = cfg.get("service_account")
 
-    # --- normalize service account into a plain dict ---
+    # normalize to plain dict
     if isinstance(sa, str):
-        # You pasted it as a JSON string in secrets
         sa = json.loads(sa)
     else:
-        # It's a toml section / Mapping; turn it into a real dict
         sa = {k: sa[k] for k in sa.keys()}
 
-    if not firebase_admin._apps:
-        cred = credentials.Certificate(sa)   # `sa` is your normalized dict
-        # Force the projectId to match your web config's projectId
-        firebase_admin.initialize_app(cred, {"projectId": _firebase_cfg()["projectId"]})
-
-    return firestore.client()
-
+    # build explicit credentials and client bound to the web projectId
+    creds = service_account.Credentials.from_service_account_info(sa)
+    db = firestore.Client(project=cfg["projectId"], credentials=creds)
+    return db
 
 def get_db():
     return _init_db()
