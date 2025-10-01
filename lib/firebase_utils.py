@@ -1,38 +1,25 @@
-#firebase_utils.py
-
-import os
+# lib/firebase_utils.py
 import json
 import requests
 import streamlit as st
-import firebase_admin
-from firebase_admin import credentials, firestore
 
-# ------------ Config helpers ------------
-def _firebase_cfg():
-    return st.secrets["firebase"]
-
-def _api_key():
-    return _firebase_cfg()["apiKey"]
-
-@st.cache_resource
-def _firebase_cfg():
-    return st.secrets["firebase"]
-
-@st.cache_resource
-import json
-import streamlit as st
+# Firestore (explicit creds + project binding)
 from google.cloud import firestore
 from google.oauth2 import service_account
 
-def _firebase_cfg():
+# ----------------- Config -----------------
+def _cfg():
     return st.secrets["firebase"]
 
+def _api_key():
+    return _cfg()["apiKey"]
+
 @st.cache_resource
-def _init_db():
-    cfg = _firebase_cfg()
+def _db():
+    cfg = _cfg()
     sa = cfg.get("service_account")
 
-    # normalize to plain dict
+    # normalize service account into a plain dict
     if isinstance(sa, str):
         sa = json.loads(sa)
     else:
@@ -41,16 +28,17 @@ def _init_db():
     # build explicit credentials and client bound to the web projectId
     creds = service_account.Credentials.from_service_account_info(sa)
     db = firestore.Client(project=cfg["projectId"], credentials=creds)
+
+    # lightweight debug you can show in the UI if needed
+    st.session_state["_debug_db_project"] = db.project
+    st.session_state["_debug_sa_email"] = sa.get("client_email", "")
     return db
 
 def get_db():
-    return _init_db()
+    return _db()
 
-# ------------ Auth via Firebase REST ------------
-# Docs: https://identitytoolkit.googleapis.com/v1/
-
-import requests
-
+# ----------------- Auth (REST) -----------------
+# https://identitytoolkit.googleapis.com/v1/
 def _post(url, payload):
     r = requests.post(url, json=payload, timeout=20)
     if r.status_code >= 400:
@@ -64,7 +52,6 @@ def _post(url, payload):
 def sign_up(email, password):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={_api_key()}"
     data = _post(url, {"email": email, "password": password, "returnSecureToken": True})
-    # optional: send verification email
     try:
         send_verification_email(data["idToken"])
     except Exception:
@@ -80,7 +67,7 @@ def send_verification_email(id_token):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={_api_key()}"
     return _post(url, {"requestType": "VERIFY_EMAIL", "idToken": id_token})
 
-# ------------ Session helpers ------------
+# ----------------- Session helpers -----------------
 def current_user():
     return st.session_state.get("user")
 
@@ -88,7 +75,7 @@ def require_auth():
     if "user" not in st.session_state:
         st.stop()
 
-# ------------ Firestore helpers ------------
+# ----------------- Firestore helpers -----------------
 def upsert_doc(path, data: dict, merge=True):
     get_db().document(path).set(data, merge=merge)
 
