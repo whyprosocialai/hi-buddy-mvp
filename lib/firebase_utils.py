@@ -19,20 +19,27 @@ def _db():
     cfg = _cfg()
     sa = cfg.get("service_account")
 
-    # normalize service account into a plain dict
+    # Normalize to a plain dict from TOML/Secrets
     if isinstance(sa, str):
         sa = json.loads(sa)
     else:
         sa = {k: sa[k] for k in sa.keys()}
 
-    # build explicit credentials and client bound to the web projectId
+    # ---- FIX: ensure private_key has real newlines (not "\n") ----
+    pk = sa.get("private_key", "")
+    if "\\n" in pk and "-----BEGIN PRIVATE KEY-----" in pk:
+        # convert backslash-n to actual newlines
+        sa["private_key"] = pk.replace("\\n", "\n")
+
+    # Build explicit credentials and client bound to the web projectId
     creds = service_account.Credentials.from_service_account_info(sa)
     db = firestore.Client(project=cfg["projectId"], credentials=creds)
 
-    # lightweight debug you can show in the UI if needed
+    # Lightweight debug (not sensitive)
     st.session_state["_debug_db_project"] = db.project
     st.session_state["_debug_sa_email"] = sa.get("client_email", "")
     return db
+
 
 def get_db():
     return _db()
